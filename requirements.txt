@@ -1,0 +1,10 @@
+# 只写版本下限，不锁死上限：便于本机跟随发行版/发行渠道升级。
+mido>=1.3.0
+PySide6-Essentials>=6.5.0
+# 0.1.3 是当前最新（PyPI 无更新版本）。注意：公开 wrapper 只有 load_sfz_file /
+# render_note，实时 note_on/note_off/cc/render_block/all_sound_off 只存在于
+# nanobind 绑定对象上，src/qmidi/engine.py 适配器依赖这一层，勿随意降级。
+pysfizz>=0.1.3
+soundfile>=0.12.0
+lameenc>=1.7.0
+pytest>=7.0.0

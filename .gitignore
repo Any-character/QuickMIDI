@@ -1,0 +1,56 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- 虚拟环境 ----
+venv/
+.venv/
+env/
+ENV/
+
+# ---- PySide6 / Qt ----
+*.ui.qrc
+*.qmlc
+qrc_*.py
+
+# ---- PyInstaller 打包产物 ----
+build/
+dist/
+*.manifest
+
+# ---- 音频产出物（可重新生成，不入库）----
+*.wav
+*.mp3
+*.flac
+*.ogg
+out/
+output/
+tmp/
+renders/
+
+# ---- 本机路径快捷方式（不入库）----
+.sfz_links/
+
+# ---- 本地私有文件（不随公开仓库分发）----
+AGENTS.md
+Prompt.txt
+.workbuddy/
+example/
+run_local.bat
+.codebuddy/
+*.mp4
+*.bundle
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

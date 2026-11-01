@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "QuickMIDI"
+version = "0.1.0"
+description = "Piano MIDI velocity-segment and sustain-pedal editor (钢琴 MIDI 力度分段与延音踏板快编工具)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Any-character" }]
+keywords = ["midi", "piano", "velocity", "sustain-pedal", "sfz", "editor"]
+classifiers = [
+    "Intended Audience :: Musicians",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+]
+dependencies = [
+    "mido>=1.3.0",
+    "PySide6-Essentials>=6.5.0",
+    "pysfizz>=0.1.3",
+    "soundfile>=0.12.0",
+    "lameenc>=1.7.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
+
+[project.scripts]
+qmidi = "qmidi.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
