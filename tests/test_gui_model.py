@@ -23,6 +23,7 @@ from qmidi.offline import TickClock  # noqa: E402
 from qmidi.segments import SegmentProject  # noqa: E402
 from qmidi.gui.render_plan import (  # noqa: E402
     PreviewMidi,
+    PreviewRequest,
     file_request,
     loop_request,
     play_request,
@@ -547,6 +548,29 @@ def test_preview_midi_is_rewritten_only_when_the_project_changes(
     assert project_digest(session.project) != digest
     cache.ensure(session.project)
     assert len(calls) == 2, "a changed project must rewrite the preview"
+
+
+def test_a_request_carries_the_digest_the_timeline_cache_keys_on(session: Session,
+                                                                tmp_path: Path):
+    """Caching the event list is only safe when the key follows the content."""
+    midi = PreviewMidi(tmp_path / "p").ensure(session.project)
+    first = play_request(session, midi, loop=False)
+    assert first.digest == project_digest(session.project)
+    assert first.timeline_key == (str(midi), first.digest, session.visible_tracks())
+
+    session.set_delta(-3)
+    second = play_request(session, midi, loop=False)
+    assert second.digest != first.digest
+    assert second.timeline_key != first.timeline_key
+    # The instrument did not change, so the engine may be reused.
+    assert second.engine_key == first.engine_key
+
+
+def test_a_request_without_a_digest_opts_out_of_the_timeline_cache():
+    """An empty digest must mean 'rebuild every time', never 'reuse the last'."""
+    request = PreviewRequest(midi_path=Path("song.mid"), tracks=frozenset({0}),
+                             start_sec=0.0, end_sec=1.0, loop=False, label="x")
+    assert request.timeline_key is None
 
 
 def test_loop_request_carries_the_visible_tracks_and_the_segment_span(session: Session,

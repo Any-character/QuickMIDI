@@ -47,6 +47,7 @@ wall-clock behaviour is exactly what you want.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -54,6 +55,7 @@ import numpy as np
 import pysfizz
 
 __all__ = [
+    "EngineCache",
     "EngineError",
     "EngineNotLoaded",
     "SfzEngine",
@@ -344,3 +346,54 @@ class SfzEngine:
             f"pysfizz {getattr(pysfizz, '__version__', '?')} exposes no {action}(); "
             "the adapter needs updating for this release"
         )
+
+
+class EngineCache:
+    """Keep one loaded instrument alive between playbacks.
+
+    Every press of play used to build a fresh :class:`SfzEngine` and call
+    :meth:`SfzEngine.load_sfz`, re-parsing the SFZ and re-mapping its samples:
+    measured on this machine with the Concert Grand, 51 ms warm and 450 ms when
+    the samples are not yet in the OS cache -- the largest single startup cost
+    after the audio device buffer.
+
+    Reuse is safe rather than clever.  ``offline.BlockStreamer.seek`` begins with
+    ``all_sound_off()`` and then restores the pedal, the state controllers and
+    every still-sounding note at its original attack velocity, so by the time the
+    first block renders, a reused engine is in the state a freshly loaded one
+    would be in.
+
+    The pool hands out *ownership*, not a shared object: :meth:`acquire` removes
+    an engine and the caller keeps it until :meth:`release`.  That is what keeps
+    two renderer threads from driving one engine at once -- if the previous
+    worker has not exited yet, its engine is not in the pool, so the next
+    playback builds a new one instead of colliding with it.
+    """
+
+    def __init__(self, capacity: int = 1) -> None:
+        self._lock = threading.Lock()
+        self._free: list[tuple[tuple, SfzEngine]] = []
+        self._capacity = max(1, int(capacity))
+
+    def acquire(self, key: tuple, build: Callable[[], SfzEngine]) -> SfzEngine:
+        """An engine for ``key``; ``build()`` runs only on a miss."""
+        with self._lock:
+            for index in range(len(self._free) - 1, -1, -1):
+                free_key, engine = self._free[index]
+                if free_key == key:
+                    del self._free[index]
+                    return engine
+        return build()
+
+    def release(self, key: tuple, engine: SfzEngine) -> None:
+        """Return a finished engine; past ``capacity`` the oldest one is dropped."""
+        with self._lock:
+            self._free.append((key, engine))
+            while len(self._free) > self._capacity:
+                self._free.pop(0)
+
+    @property
+    def idle(self) -> int:
+        """Engines currently in the pool (tests and diagnostics)."""
+        with self._lock:
+            return len(self._free)

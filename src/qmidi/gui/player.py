@@ -8,11 +8,20 @@ would need four seconds of silence first.  Streaming lets playback start after
 
 Threading contract
 ------------------
-The engine is owned by :class:`_RenderWorker` and touched by nobody else.  The
+An engine is owned by exactly one :class:`_RenderWorker` at a time.  The worker
+*borrows* one from :class:`qmidi.engine.EngineCache` and returns it when it
+exits, so a reused instrument is never driven by two threads at once.  The
 worker pushes finished float blocks into a lock-protected ring; the GUI thread
-pulls int16 bytes out of it on a timer.  ``SfzEngine`` never leaves the worker,
-so there is no engine locking anywhere -- the one thing that would be painful
-to debug.
+pulls int16 bytes out of it on a timer.  ``SfzEngine`` never leaves the worker.
+
+Why the caches exist (measured 2026-11-07, Concert Grand, 4065-note file)
+------------------------------------------------------------------------
+Pressing play used to rebuild everything: re-export the preview (218 ms, on the
+GUI thread), re-parse it into an event list (99 ms), construct an engine and
+load the instrument (51 ms warm, 450 ms cold).  Only 50-70 ms of that was
+actual synthesis.  The instrument and the event list now survive between
+playbacks; ``BlockStreamer.seek`` already resets the engine, so reuse is
+indistinguishable from a fresh start.
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ import gc
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -28,9 +38,10 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
 from PySide6.QtWidgets import QApplication
 
-from ..engine import SfzEngine
+from ..engine import EngineCache, SfzEngine, resolve_sfz_path
 from ..i18n import tr
 from ..offline import BlockStreamer, build_timeline
+from ..timeline_cache import TimelineCache
 from .render_plan import (
     PREVIEW_BLOCK_SIZE,
     PREVIEW_NUM_VOICES,
@@ -148,16 +159,29 @@ class _Ring:
 class _RenderWorker(threading.Thread):
     """Renders one request into the ring until stopped (or the span ends)."""
 
-    def __init__(self, request: PreviewRequest, ring: _Ring, on_error) -> None:
+    def __init__(self, request: PreviewRequest, ring: _Ring, on_error,
+                 engines: EngineCache, timelines: TimelineCache) -> None:
         super().__init__(daemon=True, name="qmidi-preview-render")
         self.request = request
         self._ring = ring
         self._stop_event = threading.Event()
         self._on_error = on_error
+        self._engines = engines
+        self._timelines = timelines
         self._seek_lock = threading.Lock()
         self._seek_to: Optional[float] = None
         self.error: Optional[str] = None
         self.underruns = 0
+
+    def _build_engine(self, sfz: Path) -> SfzEngine:
+        """Load the instrument for this request (a cache miss)."""
+        engine = SfzEngine(sample_rate=PREVIEW_SAMPLE_RATE,
+                           block_size=PREVIEW_BLOCK_SIZE,
+                           freewheeling=True,
+                           sample_quality=PREVIEW_SAMPLE_QUALITY,
+                           num_voices=PREVIEW_NUM_VOICES)
+        engine.load_sfz(sfz)
+        return engine
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -174,19 +198,21 @@ class _RenderWorker(threading.Thread):
         return target
 
     def run(self) -> None:  # pragma: no cover - needs an instrument and a thread
+        engine: Optional[SfzEngine] = None
+        key: tuple = ()
         try:
-            timeline = build_timeline(self.request.midi_path,
-                                      tracks=sorted(self.request.tracks))
+            timeline = self._timelines.get(
+                self.request.timeline_key,
+                lambda: build_timeline(self.request.midi_path,
+                                       tracks=sorted(self.request.tracks)),
+            )
             if not timeline:
                 self.error = tr("所选轨道没有可播放的事件（可能全部静音或文件为空）")
                 self._on_error(self.error)
                 return
-            engine = SfzEngine(sample_rate=PREVIEW_SAMPLE_RATE,
-                               block_size=PREVIEW_BLOCK_SIZE,
-                               freewheeling=True,
-                               sample_quality=PREVIEW_SAMPLE_QUALITY,
-                               num_voices=PREVIEW_NUM_VOICES)
-            engine.load_sfz(self.request.sfz_path)
+            sfz = resolve_sfz_path(self.request.sfz_path)
+            key = (*self.request.engine_key, str(sfz))
+            engine = self._engines.acquire(key, lambda: self._build_engine(sfz))
             streamer = BlockStreamer(engine, timeline)
             start, end = self.request.start_sec, self.request.end_sec
             streamer.seek(start)
@@ -221,6 +247,11 @@ class _RenderWorker(threading.Thread):
         except Exception as exc:  # surface instrumentation problems, don't hang
             self.error = f"{type(exc).__name__}: {exc}"
             self._on_error(self.error)
+        finally:
+            # Always hand the instrument back, including on the error path --
+            # otherwise the next playback silently pays the 51 ms load again.
+            if engine is not None:
+                self._engines.release(key, engine)
 
 
 class PreviewPlayer(QObject):
@@ -238,6 +269,12 @@ class PreviewPlayer(QObject):
         self._ring: Optional[_Ring] = None
         self._worker: Optional[_RenderWorker] = None
         self._request: Optional[PreviewRequest] = None
+        #: Survive across playbacks.  Keeping the instrument loaded removes the
+        #: biggest startup cost (51 ms warm, 450 ms cold); keeping the event list
+        #: removes another 99 ms per press.  Both are keyed on content, never on
+        #: file timestamps -- see ``qmidi.timeline_cache``.
+        self._engines = EngineCache()
+        self._timelines: TimelineCache = TimelineCache()
         self._written_frames = 0
         #: Position follows the device's own progress counter *relative to a
         #: baseline*, not the wall clock.  ``processedUSecs`` starts counting only
@@ -270,7 +307,8 @@ class PreviewPlayer(QObject):
         self._written_frames = 0
         self._clock_position = request.start_sec
         self._device_base = None  # set by the first pump that hears audio
-        self._worker = _RenderWorker(request, ring, self._worker_failed)
+        self._worker = _RenderWorker(request, ring, self._worker_failed,
+                                     self._engines, self._timelines)
 
         fmt = QAudioFormat()
         fmt.setSampleRate(PREVIEW_SAMPLE_RATE)

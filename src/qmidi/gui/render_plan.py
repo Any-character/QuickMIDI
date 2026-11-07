@@ -62,10 +62,37 @@ class PreviewRequest:
     #: Instrument chosen in the settings screen; ``None`` means "let the engine
     #: resolve it" (SFZ_PATH, else the repo default).
     sfz_path: Optional[Path] = None
+    #: Content hash of the project the preview file was written from.  With
+    #: ``midi_path`` it identifies the event stream without trusting file
+    #: timestamps (see ``qmidi.timeline_cache`` for why mtime is not enough).
+    digest: str = ""
 
     @property
     def duration_sec(self) -> float:
         return max(0.0, self.end_sec - self.start_sec)
+
+    @property
+    def timeline_key(self) -> Optional[tuple]:
+        """Cache key for the event list; ``None`` means "do not cache"."""
+        if not self.digest:
+            return None
+        return (str(self.midi_path), self.digest, self.tracks)
+
+    @property
+    def engine_key(self) -> tuple:
+        """Cache key for the instrument: resolution and voice cap only.
+
+        The renderer appends the *resolved* ``.sfz`` path, because ``sfz_path``
+        may be ``None`` here and resolved later from ``SFZ_PATH``; keying on the
+        request field alone would happily reuse an engine loaded from a
+        different file.
+        """
+        return (
+            PREVIEW_SAMPLE_RATE,
+            PREVIEW_BLOCK_SIZE,
+            PREVIEW_SAMPLE_QUALITY,
+            PREVIEW_NUM_VOICES,
+        )
 
 
 def project_digest(project: SegmentProject) -> str:
@@ -181,6 +208,7 @@ def loop_request(session, midi_path: Path | str,
         loop=True,
         label=tr("循环 {a}–{b}").format(a=_mmss(start), b=_mmss(end)),
         sfz_path=sfz_path,
+        digest=project_digest(session.project),
     )
 
 
@@ -217,6 +245,7 @@ def play_request(session, midi_path: Path | str, *, loop: bool,
         loop=False,
         label=tr("播放 {a}–{b}").format(a=_mmss(start), b=_mmss(end)),
         sfz_path=sfz_path,
+        digest=project_digest(session.project),
     )
 
 
@@ -232,6 +261,7 @@ def file_request(session, midi_path: Path | str, start_sec: float = 0.0) -> Prev
         end_sec=end,
         loop=False,
         label=tr("整曲 {a}–{b}").format(a=_mmss(start), b=_mmss(end)),
+        digest=project_digest(session.project),
     )
 
 
