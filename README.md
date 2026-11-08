@@ -36,7 +36,7 @@ run.bat
 1. 打开一个 `.mid`（钢琴曲最合适）；
 2. 在轨道列表选一条轨，卷帘只显示这条轨的音符（设置里可开全显示）；
 3. 选中一个力度段，拖力度条或按 `↑↓` 微调；
-4. 满意后「导出」→ MIDI 或 MP3。
+4. 满意后「导出」→ MIDI，或 WAV / FLAC / MP3 音频（可自定文件名、采样率与位深度）。
 
 ## 功能一览
 
@@ -47,7 +47,7 @@ run.bat
 - **自动踏板**：按和声变化重排延音踏板，两次切换之间设有最小/最大间隔限制；
   踏板按通道生效，同一通道的多条轨道共享同一份踏板。
 - **声像**：双钢琴作品可一键将两架钢琴分别置于左右声道；只写入导出文件，不影响预览。
-- **母带**：混响 + 温和压缩 + 限幅 + 响度标准化（-14 LUFS），只作用于 MP3，默认关闭。
+- **母带**：混响 + 温和压缩 + 限幅 + 响度标准化（-14 LUFS），只作用于导出的音频，默认关闭。
 - **BPM 可调**：整体缩放 tempo 表（文件里的渐慢等记号保留）。
 - **所见即所听**：预览与导出共用音源、踏板、尾音规则；导出有真实进度条。
 - **自定义**：快捷键、界面语言（中文/English）、只显示当前轨、播放头吸附、导出质量。
@@ -67,7 +67,7 @@ run.bat
 | GUI | PySide6-Essentials（LGPL 路线，不用 PyQt6） |
 | MIDI 读写 | mido |
 | SFZ 采样音源 | sfizz（经 pysfizz 绑定，直接内嵌，不借助 loopMIDI） |
-| 音频 / 编码 | soundfile、lameenc（MP3 多码率导出） |
+| 音频 / 编码 | soundfile（WAV / FLAC）、lameenc（MP3，128–320 kbps） |
 
 ## 模块
 
@@ -77,8 +77,8 @@ run.bat
 | `src/qmidi/offline.py` | 时间线、任意位置 seek 的状态重建、分块渲染、进度回调 |
 | `src/qmidi/segments.py` | 力度段模型（含比例缩放）、自动切段、sidecar 读写 |
 | `src/qmidi/pedal.py` / `pedal_auto.py` | 踏板段模型；按和声自动生成踏板 |
-| `src/qmidi/mastering.py` | MP3 母带链（混响/压缩/限幅/响度） |
-| `src/qmidi/exporters.py` | MIDI 外科式导出、MP3 导出（声像、母带、进度） |
+| `src/qmidi/mastering.py` | 音频母带链（混响/压缩/限幅/响度） |
+| `src/qmidi/exporters.py` | MIDI 外科式导出、WAV/FLAC/MP3 音频导出（格式能力表、位深、声像、母带、进度） |
 | `src/qmidi/keymap.py` / `i18n.py` / `settings.py` | 快捷键、界面语言、用户设置（三者皆无 Qt） |
 | `src/qmidi/gui/` | 主窗口、钢琴卷帘、轨道/段/踏板面板、设置窗口 |
 

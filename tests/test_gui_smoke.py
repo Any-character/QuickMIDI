@@ -504,6 +504,8 @@ def test_export_is_one_button_with_two_formats(qt_app, tmp_path: Path, monkeypat
     assert window.export_button.text() == "导出"
     entries = window.export_menu.actions()
     assert entries == [window.act_export_midi, window.act_export_mp3]
+    assert window.act_export_midi.text() == "导出 MIDI"
+    assert window.act_export_mp3.text() == "导出音频"
 
     # The menu is the discoverable path; the shortcuts must still work without
     # opening it, or merging the buttons would have cost the fast path.
@@ -589,6 +591,44 @@ def test_display_page_keeps_every_control_in_one_layout(qt_app, tmp_path: Path,
     assert dialog.snap in inside
     assert dialog.export_quality in inside
     assert dialog.language in inside
+
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_export_dialog_switches_its_settings_with_the_format(qt_app, tmp_path: Path):
+    """MP3 shows a bitrate, WAV/FLAC a bit depth, MIDI neither -- and the
+    chosen path carries exactly one extension, whatever the user typed."""
+    from qmidi.gui.export_dialog import ExportDialog
+
+    dialog = ExportDialog(None, source=tmp_path / "song.mid", fmt="mp3")
+    qt_app.processEvents()
+
+    mp3 = dialog.choice()
+    assert mp3.fmt == "mp3"
+    assert mp3.extension == ".mp3"
+    assert mp3.bitrate in (128, 192, 320)
+    assert mp3.bit_depth == 0
+
+    dialog._format.setCurrentIndex(dialog._format.findData("wav"))
+    wav = dialog.choice()
+    assert wav.extension == ".wav"
+    assert wav.bit_depth == 24
+    assert wav.sample_rate == 48000
+
+    dialog._format.setCurrentIndex(dialog._format.findData("flac"))
+    assert dialog.choice().bit_depth in (16, 24)
+
+    dialog._format.setCurrentIndex(dialog._format.findData("midi"))
+    qt_app.processEvents()
+    midi = dialog.choice()
+    assert midi.is_midi
+    assert midi.path.name == "song_qmidi.mid"
+    assert midi.sample_rate == 0 and midi.bit_depth == 0
+
+    dialog._format.setCurrentIndex(dialog._format.findData("flac"))
+    dialog._name.setText("take 3.mid")
+    assert dialog.choice().path.name == "take 3.flac"
 
     dialog.deleteLater()
     qt_app.processEvents()

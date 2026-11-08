@@ -60,7 +60,7 @@ _ABOUT_HTML = """
       增益余量、踏板与结尾余音都已预先处理；</li>
   <li><b>调整力度无需逐个修改音符</b>——程序自动按强弱将乐曲分段，
       调整单条滑杆即可整段变化，段内的强弱比例保持不变；</li>
-  <li><b>所见即所听</b>——预览与导出的 MIDI 和 MP3 遵循同一套规则，
+  <li><b>所见即所听</b>——预览与导出的 MIDI 和音频遵循同一套规则，
       包括结尾余音的长度；</li>
   <li><b>不依赖混音经验的润色</b>——以下三个功能各一键完成，均可撤销。</li>
 </ul>
@@ -113,7 +113,7 @@ _ABOUT_HTML = """
 
 <h3>母带</h3>
 
-<p><b>它对导出的 MP3 做最后一道处理</b>，使其听感接近发行成品。</p>
+<p><b>它对导出的音频做最后一道处理</b>，使其听感接近发行成品。</p>
 
 <p><b>具体包含四个步骤，按以下顺序：</b></p>
 <ol>
@@ -124,8 +124,8 @@ _ABOUT_HTML = """
       使导出文件在不同设备上音量一致。</li>
 </ol>
 
-<p><b>会影响什么：</b>仅导出的 MP3。导出的 MIDI 与预览均不受影响——
-预览始终是未经母带处理的声音。</p>
+<p><b>会影响什么：</b>仅导出的音频（WAV、FLAC 与 MP3 都包含）。导出的 MIDI 与预览
+均不受影响——预览始终是未经母带处理的声音。</p>
 
 <p class="note"><b>需要特别注意：压缩会削弱力度层次的差异。</b>
 这正与本软件的核心用途相关——预览中细致调整的段落强弱对比，
@@ -173,7 +173,7 @@ and export audio you can share.</b></p>
       dynamic segments automatically; moving one slider reshapes the whole
       segment while its internal balance stays intact;</li>
   <li><b>What you hear is what you get</b> -- the preview and the exported
-      MIDI/MP3 follow the same rules, down to the length of the ending;</li>
+      MIDI/audio follow the same rules, down to the length of the ending;</li>
   <li><b>Polish without mixing experience</b> -- the three features below are
       one click each, and all of them are undoable.</li>
 </ul>
@@ -233,7 +233,7 @@ seven-minute piece takes around eleven minutes).  Both centred, there is no cost
 
 <h3>Master</h3>
 
-<p><b>It applies a final pass to the exported MP3</b>, bringing its sound closer
+<p><b>It applies a final pass to the exported audio</b>, bringing its sound closer
 to a released recording.  Four steps, in order:</p>
 <ol>
   <li><b>Reverb</b> -- a modest amount of space, so the piano does not sound
@@ -247,8 +247,9 @@ to a released recording.  Four steps, in order:</p>
       devices.</li>
 </ol>
 
-<p><b>What it touches:</b> only the exported MP3.  The exported MIDI is
-unchanged, and so is the preview -- the preview is always the un-mastered sound.</p>
+<p><b>What it touches:</b> only the exported audio (WAV, FLAC and MP3 alike).
+The exported MIDI is unchanged, and so is the preview -- the preview is always
+the un-mastered sound.</p>
 
 <p class="note"><b>One thing must be stated plainly: compression reduces the
 differences between dynamics.</b>  That bears directly on this software's
@@ -322,7 +323,7 @@ class SettingsDialog(QDialog):
 
         hint = QLabel(
             tr("可以选一个 .sfz 文件，也可以选装着 .sfz 的文件夹（会自动挑基础预设，\n"
-               "跳过带括号的变体）。换音源后，预览和 MP3 导出都会用它。"),
+               "跳过带括号的变体）。换音源后，预览和音频导出都会用它。"),
             page,
         )
         hint.setWordWrap(True)
@@ -394,7 +395,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.snap)
         layout.addWidget(snap_hint)
         layout.addSpacing(14)
-        layout.addWidget(QLabel(tr("导出质量（只影响 MP3）："), page))
+        layout.addWidget(QLabel(tr("导出质量（只影响音频导出）："), page))
         layout.addWidget(self.export_quality)
         quality_hint = QLabel(
             tr("「快速」把导出速度提高约四倍（七分钟曲子约两分钟），代价是极高频细节"

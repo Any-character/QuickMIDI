@@ -32,16 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..exporters import (
-    BITRATES,
-    DEFAULT_BITRATE,
-    default_midi_output,
-    export_midi,
-    export_mp3,
-)
+from ..exporters import export_audio, export_midi
 from ..i18n import tr
 from ..keymap import KeyMap, pretty
 from ..settings import Settings
+from .export_dialog import ExportChoice, ExportDialog
 from .model import Session
 from .overview import OverviewBar
 from .piano_roll import PianoRoll
@@ -231,7 +226,7 @@ class MainWindow(QMainWindow):
         self.act_export_mp3 = act("export_mp3", self.export_mp3_file, in_bar=False)
         self.export_button = QToolButton(self)
         self.export_button.setText(tr("导出"))
-        self.export_button.setToolTip(tr("导出为 MIDI 或 MP3"))
+        self.export_button.setToolTip(tr("导出 MIDI，或音频（WAV / FLAC / MP3）"))
         self.export_button.setAutoRaise(True)
         self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.export_menu = QMenu(self.export_button)
@@ -244,9 +239,9 @@ class MainWindow(QMainWindow):
         self.act_auto_pedal = act("auto_pedal", self.auto_pedal,
                                   tr("按低音与和声变化重做踏板（可撤销）"))
         self.act_stereo = act("stereo_split", self.set_stereo_spread,
-                              tr("两台钢琴分左右（写进导出的 MIDI 和 MP3）"))
+                              tr("两台钢琴分左右（写进导出的 MIDI 和音频）"))
         self.act_master = act("master", self._on_master_toggled,
-                              tr("母带：混响 + 温和压缩 + 响度标准化（只进 MP3）"),
+                              tr("母带：混响 + 温和压缩 + 响度标准化（只进导出的音频）"),
                               checkable=True)
         bar.addSeparator()
         self.act_fit = act("fit", self.roll.zoom_fit, tr("缩放到全曲"), in_bar=False)
@@ -430,7 +425,7 @@ class MainWindow(QMainWindow):
             self._say(tr("声像已关闭（两台琴回到正中间）"))
         else:
             self._say(tr("声像：通道 {a} → {left}，通道 {b} → {right}"
-                         "（导出的 MIDI/MP3 生效，预览是两架混在中间的）").format(
+                         "（导出的 MIDI/音频生效，预览是两架混在中间的）").format(
                 a=channels[0], left=left, b=channels[1], right=right))
         if not changed:
             self._say(tr("声像没变"))
@@ -446,21 +441,36 @@ class MainWindow(QMainWindow):
 
             self.session.set_master(asdict(MasterSettings()))
             self._say(tr("母带已开启：混响 14% + 2:1 温和压缩 + 响度 -14 LUFS"
-                         "（只作用于导出的 MP3）"))
+                         "（只作用于导出的音频）"))
         else:
             self.session.set_master(None)
-            self._say(tr("母带已关闭：导出的 MP3 回到纯归一化"))
+            self._say(tr("母带已关闭：导出的音频回到纯归一化"))
         self._after_edit()
 
     # -- export ------------------------------------------------------------ #
     def export_midi_file(self) -> None:
+        """Ctrl+E: the export dialog with MIDI preselected."""
+        self._open_export("midi")
+
+    def export_mp3_file(self) -> None:
+        """Ctrl+Shift+E: the export dialog with audio preselected."""
+        self._open_export("mp3")
+
+    def _open_export(self, fmt: str) -> None:
+        """One dialog for both jobs; the menu item only picks the default."""
         if self.session is None:
             return
-        suggested = default_midi_output(self.session.project)
-        path, _ = QFileDialog.getSaveFileName(self, tr("导出 MIDI"), str(suggested),
-                                              tr("MIDI 文件 (*.mid)"))
-        if not path:
+        project = self.session.project
+        dialog = ExportDialog(self, source=Path(project.source), fmt=fmt)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        choice = dialog.choice()
+        if choice.is_midi:
+            self._export_midi_to(choice.path)
+        else:
+            self._export_audio_to(choice)
+
+    def _export_midi_to(self, path: Path) -> None:
         project = self.session.project
 
         def job(_report):
@@ -477,21 +487,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("导出完成，但有提醒"),
                                 "\n".join(f"· {w}" for w in result.warnings[:8]))
 
-    def export_mp3_file(self) -> None:
-        if self.session is None:
-            return
-        labels = [f"{rate} kbps" for rate in BITRATES]
-        choice, ok = QInputDialog.getItem(self, tr("MP3 码率"), tr("选择码率："), labels,
-                                          BITRATES.index(DEFAULT_BITRATE), False)
-        if not ok:
-            return
-        bitrate = BITRATES[labels.index(choice)]
-        source = Path(self.session.project.source)
-        suggested = source.with_name(f"{source.stem}_qmidi.mp3")
-        path, _ = QFileDialog.getSaveFileName(self, tr("导出 MP3"), str(suggested),
-                                              tr("MP3 文件 (*.mp3)"))
-        if not path:
-            return
+    def _export_audio_to(self, choice: ExportChoice) -> None:
         project = self.session.project
         preview = self.preview
         # Captured here, not read inside the thread: the user may change the
@@ -508,20 +504,26 @@ class MainWindow(QMainWindow):
         def job(report):
             # Render *from an exported MIDI*, so what is heard is what is sent.
             midi = preview.ensure(project)
-            return export_mp3(midi, path, bitrate=bitrate, sfz_path=sfz,
-                              pans=pans, master=master_settings,
-                              on_progress=report, sample_quality=quality)
+            return export_audio(midi, choice.path, fmt=choice.fmt,
+                                bitrate=choice.bitrate,
+                                sample_rate=choice.sample_rate,
+                                bit_depth=choice.bit_depth or None,
+                                sfz_path=sfz, pans=pans, master=master_settings,
+                                on_progress=report, sample_quality=quality)
 
-        self._run_background(tr("正在渲染 MP3（整曲，可能要几分钟）…"), job,
-                             self._on_mp3_exported)
+        self._run_background(tr("正在渲染音频（整曲，可能要几分钟）…"), job,
+                             self._on_audio_exported)
 
-    def _on_mp3_exported(self, result) -> None:
+    def _on_audio_exported(self, result) -> None:
         loudness = ""
         if result.lufs_after > float("-inf"):
             loudness = tr(" · 响度 {value} LUFS").format(value=f"{result.lufs_after:.1f}")
-        self._say(tr("MP3 已导出：{name} · {bitrate} kbps · {sec}s · 峰值 {peak}"
-                     "{loudness}").format(
-            name=result.path.name, bitrate=result.bitrate,
+        quality = (tr("{n} 位").format(n=result.bit_depth) if result.bit_depth
+                   else tr("{rate} kbps").format(rate=result.bitrate))
+        self._say(tr("已导出：{name} · {fmt} · {quality} · {rate} Hz · {sec}s · 峰值 "
+                     "{peak}{loudness}").format(
+            name=result.path.name, fmt=result.format.upper(), quality=quality,
+            rate=result.sample_rate,
             sec=f"{result.frames / result.sample_rate:.1f}",
             peak=f"{result.peak_after:.2f}", loudness=loudness))
 

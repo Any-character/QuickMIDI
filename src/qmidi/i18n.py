@@ -51,6 +51,7 @@ _EN: dict[str, str] = {
     "保存工程（力度段）": "Save project (velocity segments)",
     "导出 MIDI": "Export MIDI",
     "导出 MP3": "Export MP3",
+    "导出音频": "Export audio",
     "重新自动切段": "Re-segment automatically",
     "重切": "Re-cut",
     "按和声自动重做踏板": "Re-do sustain pedal from the harmony",
@@ -88,15 +89,17 @@ _EN: dict[str, str] = {
         "from the playhead",
     "当前缩放；点击恢复全曲适配": "Current zoom; click to fit the whole piece",
     "导出": "Export",
-    "导出为 MIDI 或 MP3": "Export as MIDI or MP3",
+    "导出 MIDI，或音频（WAV / FLAC / MP3）":
+        "Export MIDI, or audio (WAV / FLAC / MP3)",
     "按当前规则重新切分所有轨道（会丢弃段调整）":
         "Re-cut every track with the current rules (drops segment edits)",
     "按低音与和声变化重做踏板（可撤销）":
         "Re-do the sustain pedal from bass and harmony changes (undoable)",
-    "两台钢琴分左右（写进导出的 MIDI 和 MP3）":
-        "Place the two pianos left and right (written into the exported MIDI and MP3)",
-    "母带：混响 + 温和压缩 + 响度标准化（只进 MP3）":
-        "Mastering: reverb + gentle compression + loudness normalisation (MP3 only)",
+    "两台钢琴分左右（写进导出的 MIDI 和音频）":
+        "Place the two pianos left and right (written into the exported MIDI and audio)",
+    "母带：混响 + 温和压缩 + 响度标准化（只进导出的音频）":
+        "Mastering: reverb + gentle compression + loudness normalisation "
+        "(exported audio only)",
     "缩放到全曲": "Zoom to fit",
     "音源、显示方式和快捷键": "Instrument, display and keyboard shortcuts",
     # -- settings dialog ------------------------------------------------------ #
@@ -112,10 +115,10 @@ _EN: dict[str, str] = {
     "恢复默认": "Reset to default",
     "当前音源：": "Current instrument:",
     "可以选一个 .sfz 文件，也可以选装着 .sfz 的文件夹（会自动挑基础预设，\n"
-    "跳过带括号的变体）。换音源后，预览和 MP3 导出都会用它。":
+    "跳过带括号的变体）。换音源后，预览和音频导出都会用它。":
         "Pick one .sfz file, or a folder of them (the base preset is chosen "
         "automatically, bracketed variants skipped). Both the preview and the "
-        "MP3 export will use it.",
+        "audio export will use it.",
     "界面语言：": "Interface language:",
     "切换语言后需要重启软件才能完全生效。":
         "Restart the application after switching languages.",
@@ -135,7 +138,7 @@ _EN: dict[str, str] = {
         "Clicking the ruler or the overview bar lands the playhead on the "
         "nearest grid line.  This only affects *placing* it; the playhead that "
         "follows audio never jumps between lines.",
-    "导出质量（只影响 MP3）：": "Export quality (MP3 only):",
+    "导出质量（只影响音频导出）：": "Export quality (audio exports only):",
     "最高（渲染最慢）": "Maximum (slowest render)",
     "均衡": "Balanced",
     "快速（约为最高档的四倍速）": "Fast (about 4x the maximum setting)",
@@ -249,28 +252,47 @@ _EN: dict[str, str] = {
     "声像已关闭（两台琴回到正中间）":
         "Panning off (both pianos back in the centre)",
     "声像：通道 {a} → {left}，通道 {b} → {right}"
-    "（导出的 MIDI/MP3 生效，预览是两架混在中间的）":
+    "（导出的 MIDI/音频生效，预览是两架混在中间的）":
         "Pan: channel {a} → {left}, channel {b} → {right} "
-        "(applies to the exported MIDI/MP3; the preview mixes both in the centre)",
+        "(applies to the exported MIDI/audio; the preview mixes both in the centre)",
     "声像没变": "Panning unchanged",
-    "母带已开启：混响 14% + 2:1 温和压缩 + 响度 -14 LUFS（只作用于导出的 MP3）":
+    "母带已开启：混响 14% + 2:1 温和压缩 + 响度 -14 LUFS（只作用于导出的音频）":
         "Mastering on: 14% reverb + gentle 2:1 compression + -14 LUFS loudness "
-        "(applies only to the exported MP3)",
-    "母带已关闭：导出的 MP3 回到纯归一化":
-        "Mastering off: the exported MP3 goes back to plain normalisation",
+        "(applies only to the exported audio)",
+    "母带已关闭：导出的音频回到纯归一化":
+        "Mastering off: the exported audio goes back to plain normalisation",
     # -- main window: export ---------------------------------------------------- #
     "正在写出 MIDI…": "Writing the MIDI…",
     "MIDI 已导出：{name}（改力度 {notes} 个，重触发 {retrig} 处，涉及 {tracks} 轨）":
         "MIDI exported: {name} ({notes} velocities rewritten, {retrig} "
         "re-triggers, {tracks} track(s) touched)",
     "导出完成，但有提醒": "Export finished, with warnings",
-    "MP3 码率": "MP3 bitrate",
-    "选择码率：": "Choose a bitrate:",
-    "正在渲染 MP3（整曲，可能要几分钟）…":
-        "Rendering the MP3 (whole piece, may take minutes)…",
+    "正在渲染音频（整曲，可能要几分钟）…":
+        "Rendering the audio (whole piece, may take minutes)…",
     " · 响度 {value} LUFS": " · loudness {value} LUFS",
-    "MP3 已导出：{name} · {bitrate} kbps · {sec}s · 峰值 {peak}{loudness}":
-        "MP3 exported: {name} · {bitrate} kbps · {sec}s · peak {peak}{loudness}",
+    "已导出：{name} · {fmt} · {quality} · {rate} Hz · {sec}s · 峰值 {peak}{loudness}":
+        "Exported: {name} · {fmt} · {quality} · {rate} Hz · {sec}s · "
+        "peak {peak}{loudness}",
+    # -- export dialog ---------------------------------------------------------- #
+    "文件名：": "File name:",
+    "目录：": "Folder:",
+    "格式：": "Format:",
+    "品质：": "Quality:",
+    "采样率：": "Sample rate:",
+    "位深度：": "Bit depth:",
+    "文件名（不用写扩展名）": "File name (no extension needed)",
+    "选择导出目录": "Choose the export folder",
+    "还差一个文件名": "A file name is needed",
+    "请填写文件名。": "Please enter a file name.",
+    "文件已存在": "File already exists",
+    "{name} 已存在，要覆盖吗？": "{name} already exists. Overwrite it?",
+    "32 位浮点": "32-bit float",
+    "{n} 位": "{n}-bit",
+    "MIDI 文件（保留原始结构，不渲染音频）":
+        "MIDI file (original structure kept, no audio rendered)",
+    "WAV 文件（无损，体积最大）": "WAV file (lossless, largest)",
+    "FLAC 文件（无损，体积小于 WAV）": "FLAC file (lossless, smaller than WAV)",
+    "MP3 文件（有损，最通用）": "MP3 file (lossy, most compatible)",
     "请稍候": "Please wait",
     "{label}\n剩余约 {n} 秒": "{label}\nAbout {n} s remaining",
     "导出失败": "Export failed",

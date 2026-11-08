@@ -84,20 +84,30 @@ from .pedal import CC_SUSTAIN, PedalSpan
 from .segments import SegmentProject, clamp_velocity
 
 __all__ = [
+    "AUDIO_FORMATS",
+    "AudioFormat",
     "BITRATES",
     "DEFAULT_BITRATE",
+    "DEFAULT_BIT_DEPTH",
     "DEFAULT_PEAK_TARGET",
+    "DEFAULT_SAMPLE_RATE",
+    "SAMPLE_RATES",
     "AudioExportResult",
     "ExportError",
     "ExportResult",
     "MidiExportResult",
+    "audio_format",
+    "compose_export_path",
+    "default_audio_output",
     "default_mp3_output",
     "default_midi_output",
     "encode_mp3",
+    "export_audio",
     "export_mp3",
     "export_midi",
     "export_project",
     "to_pcm16",
+    "write_lossless",
 ]
 
 
@@ -108,7 +118,60 @@ class ExportError(RuntimeError):
 #: The three bit rates offered to the user.  128 is "send it over chat",
 #: 192 is the transparent-enough default, 320 is "give me the tape".
 BITRATES: tuple[int, ...] = (128, 192, 320)
-DEFAULT_BITRATE = 192
+#: 320 is the default because the render is already done at this point: the
+#: encoder is the only remaining lossy step, and the file is a keepsake, not a
+#: preview.  A 7-minute piece is ~17 MB instead of ~10 MB.
+DEFAULT_BITRATE = 320
+
+
+@dataclass(frozen=True)
+class AudioFormat:
+    """One container the export dialog can write.
+
+    ``bit_depths`` is empty for MP3: it is a lossy encoder with a bit rate, not
+    a PCM container, and offering "16 bit MP3" would be a lie the user could
+    then compare against a WAV and be confused by.
+    """
+
+    key: str
+    extension: str
+    lossless: bool
+    bit_depths: tuple[int, ...]
+    default_bit_depth: int
+    #: Rates the encoder can actually write.  MP3 stops at 48 kHz (LAME cannot
+    #: encode 96 kHz); offering it in the dialog and failing at export would be
+    #: the worst of both worlds.
+    sample_rates: tuple[int, ...] = (44100, 48000, 96000)
+
+
+#: Ordered as the dialog shows them: the lossy chat format last, because the
+#: common case is "save something that sounds exactly like what I heard".
+AUDIO_FORMATS: tuple[AudioFormat, ...] = (
+    AudioFormat("wav", ".wav", True, (16, 24, 32), 24),
+    AudioFormat("flac", ".flac", True, (16, 24), 24),
+    AudioFormat("mp3", ".mp3", False, (), 0, (44100, 48000)),
+)
+
+
+def audio_format(key: str) -> AudioFormat:
+    """Look one format up; an unknown key is a programming error, not a dialog."""
+    for fmt in AUDIO_FORMATS:
+        if fmt.key == key:
+            return fmt
+    raise ExportError(f"unknown audio format {key!r}; expected one of "
+                      f"{[f.key for f in AUDIO_FORMATS]}")
+
+
+#: Offered sample rates.  48 kHz is the default because it is what the preview
+#: renders at and what the device runs at: picking anything else resamples every
+#: sample twice for no audible benefit (this is a piano, not a spectrum test).
+SAMPLE_RATES: tuple[int, ...] = (44100, 48000, 96000)
+DEFAULT_SAMPLE_RATE = 48000
+
+#: 24 bit keeps a decaying piano tail well clear of the quantisation floor and
+#: still halves against 32-bit float.  16 bit is offered for CD compatibility,
+#: not because it is a better default.
+DEFAULT_BIT_DEPTH = 24
 
 #: ~-0.26 dBFS.  Just under full scale so MP3 encoder overs does not wrap.
 DEFAULT_PEAK_TARGET = 0.97
@@ -576,21 +639,26 @@ class AudioExportResult:
     lufs_after: float = float("-inf")
     loudness_gain_db: float = 0.0
     sfz_path: Optional[Path] = None
+    #: Container key ("mp3" / "flac" / "wav") and the PCM depth actually written
+    #: (0 for MP3, which has no depth).  The status bar prints these, so a user
+    #: who picked 24-bit FLAC can see that 24-bit FLAC is what they got.
+    format: str = "mp3"
+    bit_depth: int = 16
 
 
-def to_pcm16(
+def _apply_gain(
     audio: np.ndarray,
     *,
     peak_target: float = DEFAULT_PEAK_TARGET,
     normalize: bool = True,
 ) -> tuple[np.ndarray, float]:
-    """Channel-first float audio -> interleaved int16, plus the gain applied.
+    """Validate the render, apply one global attenuation, clip to [-1, 1].
 
     Anti-clipping is **one global attenuation**, ``min(1, peak_target/peak)``:
     it never amplifies, it never compresses, and it cannot smear an attack the
     way a per-sample limiter would.  See the module docstring.
 
-    Returns ``(int16 (n, channels), gain)``.
+    Returns ``(scaled (channels, n) float, gain)``.
     """
     data = np.asarray(audio)
     if data.ndim == 1:
@@ -610,12 +678,65 @@ def to_pcm16(
             )
         gain = peak_target / peak
     scaled = data * gain
-    peak_after = float(np.max(np.abs(scaled))) if scaled.size else 0.0
     # Unreachable by construction (gain <= peak_target/peak); kept as the last
     # line of defence against an integer-rounding surprise.
     np.clip(scaled, -1.0, 1.0, out=scaled)
-    pcm = np.round(scaled.T * 32767.0).astype("<i2")
-    return pcm, gain
+    return scaled, gain
+
+
+def to_pcm16(
+    audio: np.ndarray,
+    *,
+    peak_target: float = DEFAULT_PEAK_TARGET,
+    normalize: bool = True,
+) -> tuple[np.ndarray, float]:
+    """Channel-first float audio -> interleaved int16, plus the gain applied.
+
+    Returns ``(int16 (n, channels), gain)``.  MP3 needs this; the lossless
+    containers take the float signal and let libsndfile do the quantisation
+    (see :func:`write_lossless`), because hand-rolling a 24-bit int would make
+    the rounding policy ours instead of the reference implementation's.
+    """
+    scaled, gain = _apply_gain(audio, peak_target=peak_target, normalize=normalize)
+    return np.round(scaled.T * 32767.0).astype("<i2"), gain
+
+
+#: Bit depth -> libsndfile subtype.  32 is float, not int32: "32 bit WAV" is
+#: overwhelmingly float in audio work, and int32 has no dynamic-range advantage
+#: over float for a render that is already normalised.
+_SUBTYPES = {16: "PCM_16", 24: "PCM_24", 32: "FLOAT"}
+
+
+def write_lossless(
+    path: Path | str,
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    fmt: str,
+    bit_depth: int = DEFAULT_BIT_DEPTH,
+) -> Path:
+    """Write channel-first float audio as WAV or FLAC at ``bit_depth``.
+
+    The signal must already be scaled and clipped (:func:`_apply_gain`);
+    libsndfile quantises it, and it clips silently, so the caller keeping that
+    honest is what stops a too-hot render from wrapping.
+    """
+    import soundfile as sf  # lazy: the module must import without soundfile
+
+    info = audio_format(fmt)
+    if not info.lossless:
+        raise ExportError(f"{fmt} is not a lossless container")
+    if bit_depth not in info.bit_depths:
+        raise ExportError(
+            f"{fmt} supports {info.bit_depths} bit, got {bit_depth}")
+    data = np.asarray(audio)
+    if data.ndim != 2 or data.shape[0] not in (1, 2):
+        raise ExportError(f"expected channel-first (1|2, n) audio, got {data.shape}")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(target), data.T, int(sample_rate),
+             format=fmt.upper(), subtype=_SUBTYPES[bit_depth])
+    return target
 
 
 def encode_mp3(pcm: np.ndarray, sample_rate: int, bitrate: int = DEFAULT_BITRATE) -> bytes:
@@ -758,10 +879,38 @@ def _render_with_pans(
     return total, sfz_resolved, rate
 
 
+def default_audio_output(midi_path: Path | str, fmt: str = "mp3",
+                         suffix: str = "_qmidi") -> Path:
+    """``song.mid`` -> ``song_qmidi.<ext of fmt>`` beside it."""
+    p = Path(midi_path)
+    return p.with_name(f"{p.stem}{suffix}{audio_format(fmt).extension}")
+
+
+#: Suffixes a user may paste into the dialog's name field, longest first so a
+#: full ``.midi`` is not cut down to ``.mid`` plus a stray ``i``.
+_NAME_EXTENSIONS = (".midi", ".mid", ".wav", ".flac", ".mp3")
+
+
+def compose_export_path(directory: Path | str, name: str, extension: str) -> Path:
+    """``directory`` + ``name`` (suffix stripped) + ``extension``.
+
+    The dialog asks for a bare name, but people paste whole file names; typing
+    ``song.mid`` and getting ``song.mid.wav`` is the paper cut that makes an
+    export screen feel unfinished.  An empty name becomes ``untitled`` so the
+    path is always writable.
+    """
+    stem = str(name).strip() or "untitled"
+    lowered = stem.lower()
+    for suffix in _NAME_EXTENSIONS:
+        if lowered.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return Path(directory) / f"{stem}{extension}"
+
+
 def default_mp3_output(midi_path: Path | str, suffix: str = "_qmidi") -> Path:
     """``song.mid`` -> ``song_qmidi.mp3`` beside it."""
-    p = Path(midi_path)
-    return p.with_name(f"{p.stem}{suffix}.mp3")
+    return default_audio_output(midi_path, "mp3", suffix)
 
 
 def _resolve_duration(midi_path: Path | str, duration_sec: Optional[float],
@@ -776,16 +925,18 @@ def _resolve_duration(midi_path: Path | str, duration_sec: Optional[float],
     return max(length + max(0.0, tail_sec), tail_sec or 1.0)
 
 
-def export_mp3(
+def export_audio(
     midi_path: Path | str,
     out_path: Path | str | None = None,
     *,
+    fmt: str = "mp3",
     bitrate: int = DEFAULT_BITRATE,
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    bit_depth: Optional[int] = None,
     offset_sec: float = 0.0,
     duration_sec: Optional[float] = None,
     tail_sec: float = DEFAULT_TAIL_SEC,
     sfz_path: Path | str | None = None,
-    sample_rate: int = 48000,
     keep_wav: bool = False,
     wav_path: Path | str | None = None,
     peak_target: float = DEFAULT_PEAK_TARGET,
@@ -797,18 +948,34 @@ def export_mp3(
     on_progress: Optional[Callable[[float], None]] = None,
     sample_quality: Optional[int] = None,
 ) -> AudioExportResult:
-    """Render a span of a MIDI file and encode it as MP3.
+    """Render a span of a MIDI file and write it in ``fmt`` (MP3/WAV/FLAC).
+
+    ``bit_depth=None`` means the container's own default (24 for WAV and FLAC;
+    MP3 has no depth).  A depth or rate the container cannot store is refused
+    rather than silently substituted -- 32-bit FLAC does not exist, and a user
+    who chose 96 kHz should not receive a 48 kHz file with a matching name.
 
     ``duration_sec=None`` renders the whole file plus ``tail_sec`` so the last
-    chord's release is not chopped off.  ``keep_wav`` writes the float WAV
-    intermediate next to the MP3 (through :func:`qmidi.offline.write_wav`, so
-    the intermediate is lossless) for auditioning or debugging.
+    chord's release is not chopped off.  ``keep_wav`` additionally writes the
+    float WAV intermediate next to the output (through
+    :func:`qmidi.offline.write_wav`, so it is lossless) for auditioning.
     """
     midi_path = Path(midi_path)
     if not midi_path.is_file():
         raise ExportError(f"MIDI not found: {midi_path}")
-    if int(bitrate) not in BITRATES:
-        raise ExportError(f"bitrate must be one of {BITRATES}, got {bitrate}")
+    info = audio_format(fmt)
+    if int(sample_rate) not in info.sample_rates:
+        raise ExportError(
+            f"{fmt} cannot write {sample_rate} Hz; choose one of {info.sample_rates}")
+    if info.lossless:
+        depth = info.default_bit_depth if bit_depth is None else int(bit_depth)
+        if depth not in info.bit_depths:
+            raise ExportError(
+                f"{fmt} supports {info.bit_depths} bit, got {bit_depth}")
+    else:
+        if int(bitrate) not in BITRATES:
+            raise ExportError(f"bitrate must be one of {BITRATES}, got {bitrate}")
+        depth = 0
     if not 0 < float(peak_target) <= 1.0:
         raise ExportError(f"peak_target must be in (0, 1], got {peak_target}")
 
@@ -835,38 +1002,82 @@ def export_mp3(
         audio, report = master_audio(audio, rate, master)
         emit(0.90)
 
-    pcm, gain = to_pcm16(audio, peak_target=peak_target, normalize=normalize)
+    scaled, gain = _apply_gain(audio, peak_target=peak_target, normalize=normalize)
     emit(0.93)
-    blob = encode_mp3(pcm, rate, bitrate)
-    if not blob:
-        raise ExportError("lameenc produced no data")
 
-    target = Path(out_path) if out_path is not None else default_mp3_output(midi_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(blob)
+    target = (Path(out_path) if out_path is not None
+              else default_audio_output(midi_path, fmt))
+    if info.lossless:
+        # libsndfile quantises the float signal itself; handing it pre-rounded
+        # integers would make this module, not the reference decoder, decide
+        # how 24-bit rounding behaves.
+        write_lossless(target, scaled, rate, fmt=fmt, bit_depth=depth)
+        channels, frames = int(scaled.shape[0]), int(scaled.shape[1])
+    else:
+        pcm = np.round(scaled.T * 32767.0).astype("<i2")
+        blob = encode_mp3(pcm, rate, bitrate)
+        if not blob:
+            raise ExportError("lameenc produced no data")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob)
+        channels, frames = int(pcm.shape[1]), int(pcm.shape[0])
     emit(1.0)
 
     written_wav: Optional[Path] = None
-    if keep_wav:
+    if keep_wav and not info.lossless:
         written_wav = Path(wav_path) if wav_path is not None else target.with_suffix(".wav")
         write_wav(written_wav, audio * gain, rate)
 
     return AudioExportResult(
         path=target,
         wav_path=written_wav,
-        bitrate=int(bitrate),
+        bitrate=int(bitrate) if not info.lossless else 0,
         sample_rate=int(rate),
-        channels=int(pcm.shape[1]),
-        frames=int(pcm.shape[0]),
+        channels=channels,
+        frames=frames,
         offset_sec=float(offset_sec),
         duration_sec=span,
         peak_before=peak_before,
-        peak_after=float(np.max(np.abs(audio * gain))) if audio.size else 0.0,
+        peak_after=float(np.max(np.abs(scaled))) if scaled.size else 0.0,
         gain=gain,
         lufs_before=report.lufs_before if report is not None else float("-inf"),
         lufs_after=report.lufs_after if report is not None else float("-inf"),
         loudness_gain_db=report.gain_db if report is not None else 0.0,
         sfz_path=sfz_resolved,
+        format=fmt,
+        bit_depth=depth,
+    )
+
+
+def export_mp3(
+    midi_path: Path | str,
+    out_path: Path | str | None = None,
+    *,
+    bitrate: int = DEFAULT_BITRATE,
+    offset_sec: float = 0.0,
+    duration_sec: Optional[float] = None,
+    tail_sec: float = DEFAULT_TAIL_SEC,
+    sfz_path: Path | str | None = None,
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    keep_wav: bool = False,
+    wav_path: Path | str | None = None,
+    peak_target: float = DEFAULT_PEAK_TARGET,
+    normalize: bool = True,
+    settle_sec: float = 0.0,
+    pans: Optional[dict[int, int]] = None,
+    master: Optional[MasterSettings] = None,
+    block_size: int = EXPORT_BLOCK_SIZE,
+    on_progress: Optional[Callable[[float], None]] = None,
+    sample_quality: Optional[int] = None,
+) -> AudioExportResult:
+    """MP3 convenience wrapper -- see :func:`export_audio`."""
+    return export_audio(
+        midi_path, out_path, fmt="mp3", bitrate=bitrate, sample_rate=sample_rate,
+        offset_sec=offset_sec, duration_sec=duration_sec, tail_sec=tail_sec,
+        sfz_path=sfz_path, keep_wav=keep_wav, wav_path=wav_path,
+        peak_target=peak_target, normalize=normalize, settle_sec=settle_sec,
+        pans=pans, master=master, block_size=block_size,
+        on_progress=on_progress, sample_quality=sample_quality,
     )
 
 
