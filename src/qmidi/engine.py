@@ -46,7 +46,11 @@ wall-clock behaviour is exactly what you want.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import subprocess
+import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -60,6 +64,7 @@ __all__ = [
     "EngineNotLoaded",
     "SfzEngine",
     "SFZ_PATH_ENV",
+    "ascii_alias",
     "resolve_sfz_path",
     "find_base_sfz",
 ]
@@ -185,6 +190,54 @@ def resolve_sfz_path(path: Optional[os.PathLike] = None) -> Path:
     return find_base_sfz(candidate)
 
 
+#: Where ASCII junctions for non-ASCII instrument folders live.  %TEMP%, not the
+#: project: an alias is a cache, and a cleaned temp folder must cost one rebuild.
+_ALIAS_ROOT = Path(tempfile.gettempdir()) / "qmidi-sfz-aliases"
+
+#: ``parent -> alias directory``, built once per folder per process.
+_alias_cache: dict[Path, Path] = {}
+_alias_lock = threading.Lock()
+
+
+def ascii_alias(sfz: Path) -> Path:
+    """A pure-ASCII path to ``sfz`` when its folder name is not ASCII.
+
+    Why this exists: pysfizz passes the path to sfizz as an ANSI byte string, so
+    on Windows a folder such as ``...\\音色\\Concert Grand`` arrives as mojibake,
+    sfizz parses nothing and reports "0 regions" -- the user sees "playback
+    failed" for an instrument that is perfectly fine.  A directory junction with an ASCII name avoids the
+    conversion: the samples never move, and sfizz resolves the SFZ's relative
+    ``default_path`` from the real location (verified with a preset declaring
+    ``..\\..\\..\\Samples`` reached through a junction at a different depth).
+
+    ``sfz`` comes back unchanged when no alias is needed or possible: an ASCII
+    path (the common case), a non-Windows platform (UTF-8 paths work there), or
+    a file *name* that is itself non-ASCII (a junction cannot rename a file).
+    """
+    if sys.platform != "win32" or str(sfz).isascii():
+        return sfz
+    if not sfz.name.isascii():
+        return sfz
+    with _alias_lock:
+        link = _alias_cache.get(sfz.parent)
+        if link is None:
+            digest = hashlib.sha1(str(sfz.parent).encode("utf-8")).hexdigest()[:16]
+            link = _ALIAS_ROOT / digest
+            if not link.exists():
+                try:
+                    _ALIAS_ROOT.mkdir(parents=True, exist_ok=True)
+                    created = subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(link), str(sfz.parent)],
+                        capture_output=True, text=True)
+                except OSError:
+                    return sfz
+                if created.returncode != 0:
+                    return sfz
+            _alias_cache[sfz.parent] = link
+    alias = link / sfz.name
+    return alias if alias.is_file() else sfz
+
+
 class SfzEngine:
     """Block-rendering sfz engine with a deliberately small surface.
 
@@ -248,7 +301,10 @@ class SfzEngine:
     def load_sfz(self, path: Optional[os.PathLike] = None) -> Path:
         """Load an instrument; returns the resolved .sfz actually loaded."""
         sfz = resolve_sfz_path(path)
-        if not self._synth.load_sfz_file(str(sfz)):
+        # sfizz receives the path as ANSI; a non-ASCII folder name turns into
+        # mojibake and "0 regions".  Load through an ASCII junction instead.
+        loadable = ascii_alias(sfz)
+        if not self._synth.load_sfz_file(str(loadable)):
             raise EngineError(f"pysfizz refused to load {sfz} (0 regions)")
         self._sfz_path = sfz
         self._playable_keys = tuple(self._synth.playable_keys)

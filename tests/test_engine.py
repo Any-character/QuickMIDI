@@ -18,6 +18,7 @@ from qmidi.engine import (  # noqa: E402
     EngineError,
     EngineNotLoaded,
     SfzEngine,
+    ascii_alias,
     find_base_sfz,
     resolve_sfz_path,
 )
@@ -186,3 +187,37 @@ def test_offline_render_must_be_freewheeling():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+def test_ascii_alias_passes_an_ascii_path_through(tmp_path):
+    sfz = tmp_path / 'Piano.sfz'
+    sfz.write_text('<region> sample=a.wav', encoding='utf-8')
+    assert ascii_alias(sfz) == sfz
+
+
+def test_ascii_alias_cannot_help_a_non_ascii_file_name(tmp_path):
+    sfz = tmp_path / '钢琴.sfz'
+    sfz.write_text('<region> sample=a.wav', encoding='utf-8')
+    assert ascii_alias(sfz) == sfz
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_ascii_alias_routes_a_non_ascii_folder_through_a_junction(tmp_path):
+    """pysfizz sends the path as ANSI; '音色' would arrive as mojibake."""
+    import subprocess
+
+    folder = tmp_path / "音色"
+    folder.mkdir()
+    sfz = folder / "Piano.sfz"
+    sfz.write_text("<region> sample=a.wav", encoding="utf-8")
+
+    alias = ascii_alias(sfz)
+    try:
+        assert str(alias).isascii()
+        assert alias.is_file()
+        assert alias.name == sfz.name
+        assert alias.read_text(encoding="utf-8") == sfz.read_text(encoding="utf-8")
+    finally:
+        if alias != sfz:
+            subprocess.run(["cmd", "/c", "rmdir", str(alias.parent)],
+                           capture_output=True)
+
